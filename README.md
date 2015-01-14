@@ -6,5 +6,7 @@ The generated files are fully compatible with PSP's official firmwares, thus all
 
 # Credits
 Proxima (extremely valuable help, documentation of NPUMDIMG and libkirk source code with Draan and others)
+
 tpunix (original fake_np and seboot tools' source code, AMCTRL algorithms and LZRC based compression implementation)
+
 PRO Firmware (ISO reading utilities)
