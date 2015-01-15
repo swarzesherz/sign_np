@@ -446,7 +446,7 @@ int write_pbp(FILE *f, char *iso_name, char *content_id, int np_flags)
 void print_usage()
 {
 	printf("**********************************************************\n\n");
-	printf("sign_np v1.0.0 - Convert PSP ISOs to signed PSN PBPs.\n");
+	printf("sign_np v1.0.1 - Convert PSP ISOs to signed PSN PBPs.\n");
 	printf("               - Written by Hykem (C).\n\n");
 	printf("**********************************************************\n\n");
 	printf("Usage: sign_np -pbp [-c] <input> <output> <cid> <key>\n");
@@ -600,16 +600,13 @@ int main(int argc, char *argv[])
 		
 		// Read version key from input.
 		char *vk = argv[arg_offset + 4];
-		if (atoi(vk) != 0)
+		if (is_hex(vk, 0x20))
 		{
-			if (is_hex(vk, 0x20))
-			{
-				unsigned char user_key[0x10];
-				hex_to_bytes(user_key, vk, 0x20);
-				memcpy(version_key, user_key, 0x10);
-				use_version_key = 1;
-			}		
-		}
+			unsigned char user_key[0x10];
+			hex_to_bytes(user_key, vk, 0x20);
+			memcpy(version_key, user_key, 0x10);
+			use_version_key = 1;
+		}		
 		
 		// Check input file.
 		if (iso == NULL)
