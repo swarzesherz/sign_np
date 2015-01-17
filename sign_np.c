@@ -157,10 +157,10 @@ NPUMDIMG_HEADER* forge_npumdimg(int iso_size, int iso_blocks, int block_basis, c
 	np_header->body.disc_id[4] = '-';
 	memcpy(np_header->body.disc_id + 5, content_id + 11, 5);
 	
-	np_header->body.startdat_offset = 0x0;
+	np_header->body.header_start_offset = 0x0;
 	np_header->body.unk_68 = 0x0;
 	np_header->body.unk_72 = 0x0;
-	np_header->body.bbmac_param = 0x1;
+	np_header->body.bbmac_param = 0x0;
 	
 	np_header->body.unk_74 = 0x0;
 	np_header->body.unk_75 = 0x0;
@@ -259,7 +259,7 @@ NPUMDIMG_HEADER* forge_npumdimg(int iso_size, int iso_blocks, int block_basis, c
 	return np_header;
 }
 
-int write_pbp(FILE *f, char *iso_name, char *content_id, int np_flags)
+int write_pbp(FILE *f, char *iso_name, char *content_id, int np_flags, u8 *startdat_buf, int startdat_size, u8 *pgd_buf, int pgd_size)
 {
 	// Get all data files.
 	int param_sfo_size = 0;
@@ -277,15 +277,22 @@ int write_pbp(FILE *f, char *iso_name, char *content_id, int np_flags)
 	
 	// Get system version from PARAM.SFO.
 	u8 sys_ver[0x4];
+	memset(sys_ver, 0, 0x4);
 	sfo_get_key(param_sfo_buf, "PSP_SYSTEM_VER", sys_ver);
 	printf("PSP_SYSTEM_VER: %s\n\n", sys_ver);
+	
+	// Change disc ID in PARAM.SFO.
+	u8 disc_id[0x10];
+	memset(disc_id, 0, 0x10);
+	memcpy(disc_id, content_id + 0x7, 0x9);
+	sfo_put_key(param_sfo_buf, "DISC_ID", disc_id);
 	
 	// Change category in PARAM.SFO.
 	sfo_put_key(param_sfo_buf, "CATEGORY", "EG");
 	
 	// Build DATA.PSP (content ID + flags).
 	printf("Building DATA.PSP...\n");
-	int data_psp_size = 0x688;
+	int data_psp_size = 0x594 + ((startdat_size) ? startdat_size + 0xC : 0) + pgd_size;
 	u8 *data_psp_buf = (u8 *) malloc (data_psp_size);
 	memset(data_psp_buf, 0, data_psp_size);
 	memcpy(data_psp_buf + 0x560, content_id, strlen(content_id));
@@ -355,6 +362,28 @@ int write_pbp(FILE *f, char *iso_name, char *content_id, int np_flags)
 	// Store the signature.
 	memcpy(data_psp_buf, data_psp_sign_buf_out, 0x28);
 	
+	// Append STARTDAT file to DATA.PSP, if provided.
+	if (startdat_size)
+	{
+		int startdat_offset = 0x594 + 0xC;
+		memcpy(data_psp_buf + startdat_offset, startdat_buf, startdat_size);
+		
+		free(startdat_buf);
+	}
+	
+	// Append encrypted OPNSSMP file to DATA.PSP, if provided.
+	if (pgd_size)
+	{
+		int pgd_offset = (startdat_size) ? (0x594 + 0xC + startdat_size) : 0x594;
+		memcpy(data_psp_buf + pgd_offset, pgd_buf, pgd_size);
+		
+		// Store OPNSSMP offset and size.
+		*(u32 *)(data_psp_buf + 0x28 + 0x8) = pgd_offset;
+		*(u32 *)(data_psp_buf + 0x28 + 0x8 + 0x4) = pgd_size;
+		
+		free(pgd_buf);
+	}
+	
 	// Build empty DATA.PSAR.
 	printf("Building DATA.PSAR...\n");
 	int data_psar_size = 0x100;
@@ -422,7 +451,11 @@ int write_pbp(FILE *f, char *iso_name, char *content_id, int np_flags)
 	*(u32*)(pbp_header + 0x20) = header_offset;
 	memcpy(pbp_header + header_offset, data_psp_buf, data_psp_size);
 	header_offset += data_psp_size;
+	
+	// DATA.PSAR is 0x100 aligned.
 	header_offset = (header_offset + 15) &~ 15;
+	while (header_offset % 0x100) 
+		header_offset += 0x10;
 
 	// Write DATA.PSAR
 	printf("Writing DATA.PSAR...\n\n");
@@ -445,11 +478,12 @@ int write_pbp(FILE *f, char *iso_name, char *content_id, int np_flags)
 
 void print_usage()
 {
-	printf("**********************************************************\n\n");
-	printf("sign_np v1.0.1 - Convert PSP ISOs to signed PSN PBPs.\n");
+	printf("***********************************************************\n\n");
+	printf("sign_np v1.0.2 - Convert PSP ISOs to signed PSN PBPs.\n");
 	printf("               - Written by Hykem (C).\n\n");
-	printf("**********************************************************\n\n");
+	printf("***********************************************************\n\n");
 	printf("Usage: sign_np -pbp [-c] <input> <output> <cid> <key>\n");
+	printf("                    <startdat> <opnssmp>\n");
 	printf("       sign_np -elf <input> <output> <tag>\n");
 	printf("\n");
 	printf("- Modes:\n");
@@ -462,6 +496,8 @@ void print_usage()
 	printf("<output>: Resulting signed EBOOT.PBP file\n");
 	printf("<cid>: Content ID (XXYYYY-AAAABBBBB_CC-DDDDDDDDDDDDDDDD)\n");
 	printf("<key>: Version key (16 bytes) or Fixed Key (0)\n");
+	printf("<startdat>: PNG image to be used as boot screen (optional)\n");
+	printf("<opnssmp>: OPNSSMP.BIN module (optional)\n");
 	printf("\n");
 	printf("- ELF mode:\n");
 	printf("<input>: A valid ELF file\n");
@@ -482,7 +518,7 @@ void print_usage()
 
 int main(int argc, char *argv[])
 {
-	if ((argc <= 1) || (argc > 7))
+	if ((argc <= 1) || (argc > 9))
 	{
 		print_usage();
 		return 0;
@@ -509,6 +545,7 @@ int main(int argc, char *argv[])
 		{
 			printf("ERROR: Please check your input file!\n");
 			fclose(elf);
+			fclose(bin);
 			return 0;
 		}
 		
@@ -516,6 +553,7 @@ int main(int argc, char *argv[])
 		if (bin == NULL)
 		{
 			printf("ERROR: Please check your output file!\n");
+			fclose(elf);
 			fclose(bin);
 			return 0;
 		}
@@ -549,7 +587,11 @@ int main(int argc, char *argv[])
 		
 		// Exit in case of error.
 		if (seboot_size < 0)
+		{
+			fclose(elf);
+			fclose(bin);
 			return 0;
+		}
 		
 		// Write the signed EBOOT.BIN file.
 		fwrite(seboot_buf, seboot_size, 1, bin);
@@ -575,6 +617,13 @@ int main(int argc, char *argv[])
 		{
 			compress = 1;
 			arg_offset++;
+		}
+		
+		// Check for enough arguments after the compression flag.
+		if (argc < (arg_offset + 5))
+		{
+			print_usage();
+			return 0;
 		}
 		
 		// Open files.
@@ -613,6 +662,7 @@ int main(int argc, char *argv[])
 		{
 			printf("ERROR: Please check your input file!\n");
 			fclose(iso);
+			fclose(pbp);
 			return 0;
 		}
 		
@@ -620,18 +670,199 @@ int main(int argc, char *argv[])
 		if (pbp == NULL)
 		{
 			printf("ERROR: Please check your output file!\n");
+			fclose(iso);
 			fclose(pbp);
 			return 0;
 		}
 			
 		// Get ISO size.
-		fseek(iso, 0, SEEK_END);
-		int iso_size = ftell(iso);
-		fseek(iso, 0, SEEK_SET);
+		fseeko64(iso, 0, SEEK_END);
+		long long iso_size = ftello64(iso);
+		fseeko64(iso, 0, SEEK_SET);
 		
 		// Initialize KIRK.
 		printf("Initializing KIRK engine...\n\n");
 		kirk_init();
+		
+		// Check for optional files.
+		char *startdat_name = NULL;
+		char *opnssmp_name = NULL;
+		
+		if (argc > (arg_offset + 5))
+		{
+			char *ex_file_name1 = argv[arg_offset + 5];
+			char *ex_file_name2 = argv[arg_offset + 6];
+			char png_magic[4] = {0x89, 0x50, 0x4E, 0x47};  // %PNG
+			char psp_magic[4] = {0x7E, 0x50, 0x53, 0x50};  // ~PSP
+		
+			// Check the first optional file.
+			if (ex_file_name1)
+			{
+				// Read the first optional file's header.
+				char ex_file1_magic[4] = {0x00, 0x00, 0x00, 0x00};
+				FILE* ex_file1 = fopen(ex_file_name1, "rb");
+			
+				if (ex_file1 != NULL)
+					fread(ex_file1_magic, 4, 1, ex_file1);
+			
+				fclose(ex_file1);
+			
+				// Check for PNG header.
+				if (!memcmp(ex_file1_magic, png_magic, 4))
+				{
+					if (!startdat_name)
+						startdat_name = ex_file_name1;
+				}
+				else if (!memcmp(ex_file1_magic, psp_magic, 4))  // Check for PSP header.
+				{
+					if (!opnssmp_name)
+						opnssmp_name = ex_file_name1;
+				}
+				else
+				{
+					printf("ERROR: Please check your optional files!\n");
+					fclose(iso);
+					fclose(pbp);
+					return 0;
+				}
+			}
+		
+			// Check the second optional file.
+			if (ex_file_name2)
+			{
+				// Read the second optional file.
+				char ex_file2_magic[4] = {0x00, 0x00, 0x00, 0x00};
+				FILE* ex_file2 = fopen(ex_file_name2, "rb");
+				
+				if (ex_file2 != NULL)
+					fread(ex_file2_magic, 4, 1, ex_file2);
+				
+				fclose(ex_file2);
+				
+				// Check for PNG header.
+				if (!memcmp(ex_file2_magic, png_magic, 4))
+				{
+					if (!startdat_name)
+						startdat_name = ex_file_name2;
+				}
+				else if (!memcmp(ex_file2_magic, psp_magic, 4))  // Check for PSP header.
+				{
+					if (!opnssmp_name)
+						opnssmp_name = ex_file_name2;
+				}
+				else
+				{
+					printf("ERROR: Please check your optional files!\n");
+					fclose(iso);
+					fclose(pbp);
+					return 0;
+				}
+			}
+		}
+		
+		// Check for custom OPNSSMP file.
+		u8 *pgd_buf = NULL;
+		int pgd_size = 0;
+		if (opnssmp_name)
+		{
+			// Open file.
+			FILE* opnssmp = fopen(opnssmp_name, "rb");
+			
+			// Check for valid file.
+			if (opnssmp == NULL)
+			{
+				printf("ERROR: Please check your OPNSSMP file!\n");
+				fclose(opnssmp);
+				fclose(iso);
+				fclose(pbp);
+				return 0;
+			}
+
+			// Get OPNSSMP file size.
+			fseek(opnssmp, 0, SEEK_END);
+			int opnssmp_size = ftell(opnssmp);
+			fseek(opnssmp, 0, SEEK_SET);
+		
+			// Generate random PGD key.
+			u8 pgd_key[0x10];
+			memset(pgd_key, 0, 0x10);
+			sceUtilsBufferCopyWithRange(pgd_key, 0x10, 0, 0, KIRK_CMD_PRNG);
+			
+			// Prepare PGD buffers.
+			int pgd_block_size = 2048;
+			int pgd_blocks = ((opnssmp_size + pgd_block_size - 1) &~ (pgd_block_size - 1)) / pgd_block_size;
+			pgd_buf = (u8 *) malloc (0x90 + opnssmp_size + pgd_blocks * 16);
+		
+			// Read OPNSSMP file.
+			u8 *opnssmp_buf = (u8 *) malloc (opnssmp_size);
+			fread(opnssmp_buf, opnssmp_size, 1, opnssmp);
+		
+			// Encrypt OPNSSMP file.
+			pgd_size = encrypt_pgd(opnssmp_buf, opnssmp_size, pgd_block_size, 1, 1, 2, pgd_key, pgd_buf);
+			
+			// Clean up.
+			fclose(opnssmp);
+			free(opnssmp_buf);
+		}
+		
+		// Check for custom STARTDAT file.
+		u8 *startdat_buf = NULL;
+		int startdat_size = 0;
+		if (startdat_name)
+		{
+			// Open file.
+			FILE* png = fopen(startdat_name, "rb");
+			
+			// Check for valid file.
+			if (png == NULL)
+			{
+				printf("ERROR: Please check your STARTDAT file!\n");
+				fclose(png);
+				fclose(iso);
+				fclose(pbp);
+				return 0;
+			}
+
+			// Get STARTDAT file size.
+			fseek(png, 0, SEEK_END);
+			int png_size = ftell(png);
+			fseek(png, 0, SEEK_SET);
+			
+			// Prepare STARTDAT buffer.
+			startdat_size = png_size + 0x50;
+			startdat_buf = (u8 *) malloc (startdat_size);
+			
+			// Build STARTDAT header.
+			STARTDAT_HEADER sd_header[0x50];
+			memset(sd_header, 0, 0x50);
+			
+			// Set magic STARTDAT.
+			sd_header->magic[0] = 0x53;
+			sd_header->magic[1] = 0x54;
+			sd_header->magic[2] = 0x41;
+			sd_header->magic[3] = 0x52;
+			sd_header->magic[4] = 0x54;
+			sd_header->magic[5] = 0x44;
+			sd_header->magic[6] = 0x41;
+			sd_header->magic[7] = 0x54;
+			
+			// Set unknown flags.
+			sd_header->unk1 = 0x1;
+			sd_header->unk2 = 0x1;
+			
+			// Set header and data size.
+			sd_header->header_size = 0x50;
+			sd_header->data_size = png_size;
+			
+			// Copy the STARTDAT header.
+			memcpy(startdat_buf, sd_header, 0x50);
+			
+			// Read the PNG file.
+			fread(startdat_buf + 0x50, png_size, 1, png);
+			
+			// Clean up.
+			fclose(png);
+		}
 		
 		// Set keys' context.
 		MAC_KEY mkey;
@@ -641,7 +872,7 @@ int main(int argc, char *argv[])
 		int np_flags = (use_version_key) ? 0x2 : (0x3 | (0x01000000));
 		int block_basis = 0x10;
 		int block_size = block_basis * 2048;
-		int iso_blocks = (iso_size + block_size - 1) / block_size;
+		long long iso_blocks = (iso_size + block_size - 1) / block_size;
 		
 		// Generate random header key.
 		sceUtilsBufferCopyWithRange(header_key, 0x10, 0, 0, KIRK_CMD_PRNG);
@@ -652,22 +883,22 @@ int main(int argc, char *argv[])
 		
 		// Write PBP data.
 		printf("Writing PBP data...\n");
-		int table_offset = write_pbp(pbp, iso_name, content_id, np_flags);
-		int table_size = iso_blocks * 0x20;
-		int np_offset = table_offset - 0x100;
+		long long table_offset = write_pbp(pbp, iso_name, content_id, np_flags, startdat_buf, startdat_size, pgd_buf, pgd_size);
+		long long table_size = iso_blocks * 0x20;
+		long long np_offset = table_offset - 0x100;
 		int np_size = 0x100;
 		
 		// Write NPUMDIMG table.
-		printf("NPUMDIMG table size: %d\n", table_size);
+		printf("NPUMDIMG table size: %I64d\n", table_size);
 		printf("Writing NPUMDIMG table...\n\n");
 		u8 *table_buf = malloc(table_size);
 		memset(table_buf, 0, table_size);
 		fwrite(table_buf, table_size, 1, pbp);
 		
 		// Write ISO blocks.
-		printf("ISO size: %d\n", iso_size);
-		printf("ISO blocks: %d\n", iso_blocks);
-		int iso_offset = 0x100 + table_size;
+		printf("ISO size: %I64d\n", iso_size);
+		printf("ISO blocks: %I64d\n", iso_blocks);
+		long long iso_offset = 0x100 + table_size;
 		u8 *iso_buf = malloc(block_size * 2);
 		u8 *lzrc_buf = malloc(block_size * 2);
 		
@@ -680,9 +911,9 @@ int main(int argc, char *argv[])
 
 			// Read ISO block.
 			memset(iso_buf, 0, block_size);
-			if ((ftell(iso) + block_size) > iso_size)
+			if ((ftello64(iso) + block_size) > iso_size)
 			{
-				int remaining = iso_size - ftell(iso);
+				long long remaining = iso_size - ftello64(iso);
 				fread(iso_buf, remaining, 1, iso);
 				wsize = remaining;
 			}
@@ -735,7 +966,7 @@ int main(int argc, char *argv[])
 
 			// Update offset.
 			iso_offset += wsize;
-			printf("\rWriting ISO blocks: %02d%%", i * 100 / iso_blocks);
+			printf("\rWriting ISO blocks: %02I64d%%", i * 100 / iso_blocks);
 		}
 		printf("\rWriting ISO blocks: 100%%\n\n");
 		
@@ -747,7 +978,7 @@ int main(int argc, char *argv[])
 		
 		// Forge NPUMDIMG header.
 		printf("Forging NPUMDIMG header...\n");
-		NPUMDIMG_HEADER* npumdimg = forge_npumdimg(iso_size, iso_blocks, block_basis, content_id, np_flags, version_key, header_key, data_key);
+		NPUMDIMG_HEADER* npumdimg = forge_npumdimg((int)iso_size, (int)iso_blocks, block_basis, content_id, np_flags, version_key, header_key, data_key);
 		printf("NPUMDIMG flags: 0x%08X\n", np_flags);
 		printf("NPUMDIMG block basis: 0x%08X\n", block_basis);
 		printf("NPUMDIMG version key: 0x");
@@ -768,9 +999,9 @@ int main(int argc, char *argv[])
 		printf("\n\n");
 	
 		// Update NPUMDIMG header and NP table.
-		fseek(pbp, np_offset, SEEK_SET);
+		fseeko64(pbp, np_offset, SEEK_SET);
 		fwrite(npumdimg, np_size, 1, pbp);
-		fseek(pbp, table_offset, SEEK_SET);
+		fseeko64(pbp, table_offset, SEEK_SET);
 		fwrite(table_buf, table_size, 1, pbp);
 		
 		// Clean up.

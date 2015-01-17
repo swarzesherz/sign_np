@@ -23,6 +23,19 @@ u64 se64(u64 i)
 		((i & 0x00ff000000000000) >> 40) | ((i & 0xff00000000000000) >> 56);
 }
 
+bool isEmpty(unsigned char* buf, int buf_size)
+{
+	if (buf != NULL)
+	{
+		int i;
+		for(i = 0; i < buf_size; i++)
+		{
+			if (buf[i] != 0) return false;
+		}
+	}
+	return true;
+}
+
 u64 hex_to_u64(const char* hex_str)
 {
 	u32 length = strlen(hex_str);

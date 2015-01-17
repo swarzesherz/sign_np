@@ -11,7 +11,7 @@ TARGET1 = libkirk/libkirk.a
 OBJS1 = libkirk/kirk_engine.o libkirk/aes.o libkirk/sha1.o libkirk/amctrl.o libkirk/bn.o libkirk/ec.o
 
 TARGET2 = sign_np
-OBJS2 = sign_np.o eboot.o isoreader.o tlzrc.o utils.o
+OBJS2 = sign_np.o eboot.o pgd.o isoreader.o tlzrc.o utils.o
 
 all: $(TARGET1)
 

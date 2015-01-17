@@ -10,6 +10,7 @@
 #include "libkirk/amctrl.h"
 #include "isoreader.h"
 #include "eboot.h"
+#include "pgd.h"
 #include "tlzrc.h"
 #include "utils.h"
 
@@ -43,6 +44,14 @@ typedef struct {
 } SFO_Entry;
 
 typedef struct {
+	u8				 magic[8];		// STARTDAT
+	u32				 unk1;			// 0x01
+	u32				 unk2;			// 0x01
+	u32				 header_size;
+	u32				 data_size;
+} STARTDAT_HEADER;
+
+typedef struct {
 	u16 sector_size; 	// 0x0800
 	u16 unk_2;			// 0xE000
 	u32 unk_4;
@@ -57,7 +66,7 @@ typedef struct {
 	u32 unk_40;
 	u32 block_entry_offset;
 	char disc_id[0x10];
-	u32 startdat_offset;
+	u32 header_start_offset;
 	u32 unk_68;
 	u8 unk_72;
 	u8 bbmac_param;

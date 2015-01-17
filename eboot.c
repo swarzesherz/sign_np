@@ -106,7 +106,7 @@ void build_psp_header(PSP_Header2 *psph, u8 *ebuf, int esize)
 	{
 		if (ph[i].p_type == PT_LOAD) {
 			if (j > 3) {
-				printf("Too many segments!\n");
+				printf("ERROR: Too many EBOOT PH segments!\n");
 				continue;
 			}
 			psph->seg_align[j]   = ph[i].p_align;
